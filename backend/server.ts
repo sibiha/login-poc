@@ -1,78 +1,69 @@
 const express = require('express');
-const session = require('express-session');
-const passport = require('passport');
-const GitHubStrategy = require('passport-github2').Strategy;
 const axios = require('axios');
+const querystring = require('querystring');
+const app = express();
 const cors = require('cors');
 
-const app = express();
-const PORT = process.env.PORT || 5000;
-
-// GitHub OAuth credentials
 const CLIENT_ID = 'Ov23liZtZ9oRofXA6IXI';
-// const CLIENT_SECRET = '0c05a560ebbbf0eb295ad272030741f30e17bb88';
-// const CLIENT_SECRET = '94806b9eed8abf175f47c26bcd43bff1179510c3'
-const CLIENT_SECRET = '392b8cf1e0d4a257d2f4ae9f82d9b48189a0b9e8'
-const CALLBACK_URL = 'http://localhost:5000/auth/github/callback';
+const CLIENT_SECRET = 'b5d425c9003cfb5021f1da23ebeff23f72ed53e1';
+const REDIRECT_URI = 'http://localhost:5000/auth/github/callback';
 
 app.use(cors({
   origin: 'http://localhost:5173',  // Replace with the correct frontend URL in production
   credentials: true,  // Allow cookies/session to be sent with requests
 }));
 
-// Set up session middleware
-app.use(
-  session({
-    secret: 'your-secret-key',
-    resave: false,
-    saveUninitialized: false,
-  })
-);
+app.get('/auth/github/login', (req, res) => {
+  const githubAuthUrl = `https://github.com/login/oauth/authorize?client_id=${CLIENT_ID}&redirect_uri=${REDIRECT_URI}&scope=user`;
+  res.redirect(githubAuthUrl);
+});
 
-// Initialize passport
-passport.use(
-  new GitHubStrategy(
-    {
-      clientID: CLIENT_ID,
-      clientSecret: CLIENT_SECRET,
-      callbackURL: CALLBACK_URL,
-    },
-    async (accessToken, refreshToken, profile, done) => {
-      // Save user profile information in session
-      return done(null, { profile, accessToken });
-    }
-  )
-);
+app.get('/auth/github/callback', async (req, res) => {
+  const { code } = req.query;
+  const data = querystring.stringify({
+    client_id: CLIENT_ID,
+    client_secret: CLIENT_SECRET,
+    code,
+    redirect_uri: REDIRECT_URI,
+  });
 
-passport.serializeUser((user, done) => done(null, user));
-passport.deserializeUser((user, done) => done(null, user));
+  try {
+    const response = await axios.post('https://github.com/login/oauth/access_token', data, {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    });
 
-app.use(passport.initialize());
-app.use(passport.session());
-
-// GitHub OAuth route
-app.get('/auth/github', passport.authenticate('github', { scope: ['user'] }));
-
-// GitHub callback route
-app.get(
-  '/auth/github/callback',
-  passport.authenticate('github', { failureRedirect: '/' }),
-  (req, res) => {
-    // On successful login, redirect to the dashboard
-    res.redirect('http://localhost:5173/dashboard');
-  }
-);
-
-// Get user info (from GitHub API)
-app.get('/api/user', (req, res) => {
-  if (req.isAuthenticated()) {
-    const user = req.user.profile;
-    res.json(user);
-  } else {
-    res.status(401).json({ message: 'Not authenticated' });
+    const accessToken = querystring.parse(response.data).access_token;
+    const redirectUrl = `http://localhost:5173/dashboard?access_token=${accessToken}`;
+    res.redirect(redirectUrl);
+  } catch (error) {
+    res.send('Error authenticating user');
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+app.get('/api/user/:access_token', async (req, res) => {
+  const accessToken = req.params.access_token;
+
+  if (!accessToken) {
+    return res.status(400).send('Access token is required');
+  }
+
+  try {
+    // Use the access token to fetch the user's data from GitHub
+    const userResponse = await axios.get('https://api.github.com/user', {
+      headers: {
+        Authorization: `token ${accessToken}`,
+      },
+    });
+
+    const user = userResponse.data;
+    res.json(user);
+  } catch (error) {
+    res.status(500).send('Error fetching user data');
+  }
+});
+
+app.listen(5000, () => {
+  console.log('Server running on http://localhost:5000');
 });
